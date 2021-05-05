@@ -4,6 +4,8 @@
 
     pip install -r requirements.txt
 
+Copy config.ini.example to config.ini and fill the values.
+
 == Usage
 
 python dradisfs.py <mountpoint>
