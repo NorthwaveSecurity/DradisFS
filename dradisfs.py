@@ -9,6 +9,7 @@ from stat import S_IFDIR, S_IFLNK, S_IFREG
 from sys import argv, exit
 from time import time
 from functools import cache
+import re
 
 from fuse import FUSE, FuseOSError, Operations, LoggingMixIn
 from dradis import Dradis
@@ -20,6 +21,11 @@ config.read('config.ini')
 
 api_token = config['DEFAULT']['api_token']
 url = config['DEFAULT']['url']
+
+
+def create_filename(label):
+    return re.sub(r'[^\w\-_\. ]', '_', label)
+
 
 class DradisCached(Dradis):
 
@@ -39,6 +45,7 @@ class DradisCached(Dradis):
     def get_all_nodes(self, project_id):
         return super().get_all_nodes(project_id)
 
+
 class DradisFS(LoggingMixIn, Operations):
     'Interaction with dradis api via filesystem'
 
@@ -52,6 +59,7 @@ class DradisFS(LoggingMixIn, Operations):
         self.projects = {}
         self.data = {}
         self.fd = 0
+        self.update_projects()
 
     def get_stats(self, dir=True):
         now = time()
@@ -82,6 +90,9 @@ class DradisFS(LoggingMixIn, Operations):
             self.files[path]['stats']['st_size'] = len(contents)
             self.fd += 1
             return self.fd
+        elif f['type'] == 'issue_content':
+            self.fd += 1
+            return self.fd
         else:
             return FuseOSError("Failed to open file")
 
@@ -103,7 +114,7 @@ class DradisFS(LoggingMixIn, Operations):
 
     def update_projects(self):
         for p in self.api.get_all_projects():
-            filename = '{}_{}'.format(p['id'], p['name'])
+            filename = create_filename('{}_{}'.format(p['id'], p['name']))
             p['filename'] = filename
             path = '/' + filename
             self.projects[p['id']] = p
@@ -117,7 +128,7 @@ class DradisFS(LoggingMixIn, Operations):
         project_id = self.files[project_path]['id']
         result = []
         for i in self.api.get_all_issues(project_id):
-            filename = "{}_{}".format(i['id'], i['title'])
+            filename = create_filename("{}_{}".format(i['id'], i['title']))
             path = "{}/{}".format(project_path, filename)
             self.files[path] = {
                 'type': 'issue',
@@ -125,6 +136,16 @@ class DradisFS(LoggingMixIn, Operations):
                 'id': i['id'],
                 'project_id': project_id,
             }
+            issue_content_path = path + "/issue"
+            self.files[issue_content_path] = {
+                'type': 'issue_content',
+                'stats': self.get_stats(False),
+                'id': i['id'],
+                'project_id': project_id,
+            }
+            contents = self.encode_contents(i['text'])
+            self.files[issue_content_path]['stats']['st_size'] = len(contents)
+            self.data[issue_content_path] = contents
             result.append(filename)
         return result
 
@@ -133,7 +154,7 @@ class DradisFS(LoggingMixIn, Operations):
         result = []
         for node in self.api.get_all_nodes(f['project_id']):
             has_evidence = False
-            node_filename = node['label']
+            node_filename = create_filename(node['label'])
             node_path = "{}/{}".format(issue_path, node_filename)
             evidences = list(filter(lambda e: e['issue']['id'] == f['id'], node['evidence']))
             for e in evidences:
@@ -177,7 +198,7 @@ class DradisFS(LoggingMixIn, Operations):
             result.append(filename)
         return result
 
-    def readdir(self, path, fh):
+    def readdir(self, path, fh=None):
         if path == '/':
             self.update_projects()
             return ['.', '..'] + [p['filename'] for p in self.projects.values()]
@@ -188,7 +209,7 @@ class DradisFS(LoggingMixIn, Operations):
         if type == 'project':
             return ['.', '..'] + self.get_issues(path)
         if type == 'issue':
-            return ['.', '..'] + self.get_nodes(path)
+            return ['.', '..', 'issue'] + self.get_nodes(path)
         if type == 'node':
             return ['.', '..'] + self.get_evidence(path)
         return ['.', '..']
