@@ -64,6 +64,7 @@ class DradisFS(LoggingMixIn, Operations):
         "create new evidence or issue"
         index = path.rfind("/")
         dir = path[:index]
+        filename = path[index+1:]
         f = self.files[dir]
         stats = self.get_stats(path, mode)
         if f['type'] == 'node':
@@ -78,6 +79,10 @@ class DradisFS(LoggingMixIn, Operations):
             contents = default_content_block
             content_block = self.api.create_contentblock(f['project_id'], contents)
             self.get_content_blocks(dir)
+        if f['type'] == 'issue':
+            label = filename
+            self.api.create_node(f['project_id'], label, type_id=1)
+            self.get_nodes(dir)
 
     def mkdir(self, path, mode):
         "create new issue"
@@ -114,7 +119,7 @@ class DradisFS(LoggingMixIn, Operations):
         try:
             return attrs[name]
         except KeyError:
-            return FuseOSError(ENOATTR)
+            return ''
 
     def getattr(self, path, fh=None):
         if path not in self.files:
@@ -168,23 +173,17 @@ class DradisFS(LoggingMixIn, Operations):
         f = self.files[issue_path]
         result = []
         for node in self.api.get_all_nodes(f['project_id']):
-            has_evidence = False
             node_filename = create_filename(node['label'])
             node_path = "{}/{}".format(issue_path, node_filename)
             evidences = list(filter(lambda e: e['issue']['id'] == f['id'], node['evidence']))
-            for e in evidences:
-                if e['content'] != '':
-                    has_evidence = True
-                    break
-            if has_evidence:
-                self.files[node_path] = {
-                    'type': 'node',
-                    'stats': self.get_stats(),
-                    'id': node['id'],
-                    'project_id': f['project_id'],
-                    'issue_id': f['id'],
-                }
-                result.append(node_filename)
+            self.files[node_path] = {
+                'type': 'node',
+                'stats': self.get_stats(),
+                'id': node['id'],
+                'project_id': f['project_id'],
+                'issue_id': f['id'],
+            }
+            result.append(node_filename)
         return result
 
     def get_content_blocks(self, path):
@@ -269,6 +268,8 @@ class DradisFS(LoggingMixIn, Operations):
             self.api.delete_issue(f['project_id'], f['id'])
         if f['type'] == 'content_block':
             self.api.delete_contentblock(f['project_id'], f['id'])
+        if f['type'] == 'node':
+            self.api.delete_node(f['project_id'], f['id'])
         del self.files[path]
         del self.data[path]
 
