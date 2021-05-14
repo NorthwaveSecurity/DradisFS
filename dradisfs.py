@@ -65,9 +65,8 @@ class DradisFS(LoggingMixIn, Operations):
         self.fd = 0
         self.update_projects()
 
-    def get_stats(self, dir=True):
+    def get_stats(self, dir=True, mode=0o644):
         now = time()
-        mode = 0o644
         if dir:
             return dict(st_mode=(S_IFDIR | mode), st_ctime=now,
                         st_mtime=now, st_atime=now, st_nlink=2)
@@ -77,8 +76,28 @@ class DradisFS(LoggingMixIn, Operations):
                                  st_atime=time())
 
     def create(self, path, mode):
-        "create new evidence"
-        pass
+        "create new evidence or issue"
+        index = path.rfind("/")
+        dir = path[:index]
+        f = self.files[dir]
+        if f['type'] == 'node':
+            contents = "#[Description]#\n"
+            evidence = self.api.create_evidence(f['project_id'], f['id'], f['issue_id'], contents)
+            stats = self.get_stats(path, mode)
+            contents = self.encode_contents(contents)
+            stats['st_size'] = len(contents)
+            self.files[path] = {
+                'type': 'evidence',
+                'stats': stats,
+                'node_id': f['id'],
+                'issue_id': f['issue_id'],
+                'project_id': f['project_id'],
+                'id': evidence['id'],
+            }
+            self.data[path] = contents
+            self.utimens(path)
+        self.fd += 1
+        return self.fd 
 
     def mkdir(self, path, mode):
         "create new issue"
@@ -217,7 +236,7 @@ class DradisFS(LoggingMixIn, Operations):
         f = self.files[node_path]
         result = []
         i = 0
-        for e in self.api.get_all_evidence(f['project_id'], f['id']):
+        for e in sorted(self.api.get_all_evidence(f['project_id'], f['id']), key=lambda x:x['id']):
             if e['issue']['id'] != f['issue_id']:
                 continue
             filename = str(i)
@@ -265,7 +284,11 @@ class DradisFS(LoggingMixIn, Operations):
 
     def unlink(self, path):
         "Remove evidence"
-        pass
+        f = self.files[path]
+        if f['type'] == 'evidence':
+            self.api.delete_evidence(f['project_id'], f['node_id'], f['id'])
+        del self.files[path]
+        del self.data[path]
 
     def truncate(self, path, length, fh):
         self.data[path] = self.data[path][:length]
@@ -292,6 +315,9 @@ class DradisFS(LoggingMixIn, Operations):
         atime, mtime = times if times else (now, now)
         self.files[path]['stats']['st_atime'] = atime
         self.files[path]['stats']['st_mtime'] = mtime
+
+    def chmod(self, path, mode):
+        pass
 
 
 if __name__ == '__main__':
