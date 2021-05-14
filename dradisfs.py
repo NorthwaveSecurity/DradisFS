@@ -4,7 +4,7 @@ from __future__ import print_function, absolute_import, division
 import logging
 
 from collections import defaultdict
-from errno import ENOENT, ENOSYS
+from errno import ENOENT, ENOSYS, ENOATTR
 from stat import S_IFDIR, S_IFLNK, S_IFREG
 from sys import argv, exit
 from time import time
@@ -89,22 +89,22 @@ class DradisFS(LoggingMixIn, Operations):
         f = self.files[path]
         if f['type'] == 'evidence':
             evidence = self.api.get_evidence(f['project_id'], f['node_id'], f['id'])
-            contents = self.encode_contents(evidence['content'])
-            self.data[path] = contents
-            self.files[path]['stats']['st_size'] = len(contents)
-            self.utimens(path)
-            self.fd += 1
-            return self.fd
+            contents = evidence['content']
         elif f['type'] == 'issue_content':
             issue = self.api.get_issue(f['project_id'], f['id'])
-            text = self.encode_contents(issue['text'])
-            self.data[path] = text
-            self.files[path]['stats']['st_size'] = len(text)
-            self.utimens(path)
-            self.fd += 1
-            return self.fd
+            contents = issue['text']
+        elif f['type'] == 'content_block':
+            content_block = self.api.get_contentblock(f['project_id'], f['id'])
+            contents = content_block['content']
         else:
             return FuseOSError("Failed to open file")
+
+        contents = self.encode_contents(contents)
+        self.data[path] = contents
+        self.files[path]['stats']['st_size'] = len(contents)
+        self.utimens(path)
+        self.fd += 1
+        return self.fd
 
     def read(self, path, size, offset, fh):
         return self.data[path][offset:offset + size]
@@ -132,6 +132,12 @@ class DradisFS(LoggingMixIn, Operations):
                 'type': 'project',
                 'stats': self.get_stats(),
                 'id': p['id'],
+            }
+            content_blocks_path = path + '/content_blocks'
+            self.files[content_blocks_path] = {
+                'type': 'content_blocks',
+                'stats': self.get_stats(),
+                'project_id': p['id'],
             }
 
     def get_issues(self, project_path):
@@ -182,6 +188,25 @@ class DradisFS(LoggingMixIn, Operations):
                 result.append(node_filename)
         return result
 
+    def get_content_blocks(self, path):
+        f = self.files[path]
+        result = []
+        for block in self.api.get_all_contentblocks(f['project_id']):
+            block_filename = create_filename(block['title'])
+            block_path = "{}/{}".format(path, block_filename)
+            content = self.encode_contents(block['content'])
+            stats = self.get_stats(dir=False)
+            stats['st_size'] = len(content)
+            self.files[block_path] = {
+                'type': 'content_block',
+                'stats': stats,
+                'id': block['id'],
+                'project_id': f['project_id'],
+            }
+            self.data[block_path] = content
+            result.append(block_filename)
+        return result
+
     def encode_contents(self, contents):
         return contents.encode('utf-8')
 
@@ -220,11 +245,13 @@ class DradisFS(LoggingMixIn, Operations):
         f = self.files[path]
         type = f['type']
         if type == 'project':
-            return ['.', '..'] + self.get_issues(path)
+            return ['.', '..', 'content_blocks'] + self.get_issues(path)
         if type == 'issue':
             return ['.', '..', 'issue'] + self.get_nodes(path)
         if type == 'node':
             return ['.', '..'] + self.get_evidence(path)
+        if type == 'content_blocks':
+            return ['.', '..'] + self.get_content_blocks(path)
         return ['.', '..']
 
     def rename(self, old, new):
@@ -255,6 +282,8 @@ class DradisFS(LoggingMixIn, Operations):
             self.api.update_evidence(f['project_id'], f['node_id'], f['issue_id'], f['id'], contents)
         if f['type'] == 'issue_content':
             self.api.update_issue(f['project_id'], f['id'], contents)
+        if f['type'] == 'content_block':
+            self.api.update_contentblock(f['project_id'], f['id'], contents)
         self.utimens(path)
         return len(data)
 
