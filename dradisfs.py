@@ -9,7 +9,7 @@ from stat import S_IFDIR, S_IFLNK, S_IFREG
 from sys import argv, exit
 from time import time
 from functools import cache
-from templates import default_issue, default_evidence
+from templates import default_issue, default_evidence, default_content_block
 import re
 
 from fuse import FUSE, FuseOSError, Operations, LoggingMixIn
@@ -33,22 +33,6 @@ class DradisCached(Dradis):
     @cache
     def get_all_projects(self):
         return super().get_all_projects()
-
-    # @cache
-    # def get_all_issues(self, project_id):
-    #     return super().get_all_issues(project_id)
-
-    # @cache
-    # def get_all_evidence(self, project_id, node_id):
-    #     return super().get_all_evidence(project_id, node_id)
-
-    # @cache
-    # def get_all_nodes(self, project_id):
-    #     return super().get_all_nodes(project_id)
-
-    # @cache
-    # def get_evidence(self, project_id, node_id, evidence_id):
-    #     return super().get_evidence(project_id, node_id, evidence_id)
 
 
 class DradisFS(LoggingMixIn, Operations):
@@ -90,6 +74,10 @@ class DradisFS(LoggingMixIn, Operations):
             contents = default_issue
             issue = self.api.create_issue(f['id'], contents)
             self.get_issues(dir)
+        if f['type'] == 'content_blocks':
+            contents = default_content_block
+            content_block = self.api.create_contentblock(f['project_id'], contents)
+            self.get_content_blocks(dir)
 
     def mkdir(self, path, mode):
         "create new issue"
@@ -203,7 +191,7 @@ class DradisFS(LoggingMixIn, Operations):
         f = self.files[path]
         result = []
         for block in self.api.get_all_contentblocks(f['project_id']):
-            block_filename = create_filename(block['title'])
+            block_filename = create_filename("{}_{}".format(block['id'], block['title']))
             block_path = "{}/{}".format(path, block_filename)
             content = self.encode_contents(block['content'])
             stats = self.get_stats(dir=False)
@@ -279,6 +267,8 @@ class DradisFS(LoggingMixIn, Operations):
             self.api.delete_evidence(f['project_id'], f['node_id'], f['id'])
         if f['type'] == 'issue' or f['type'] == 'issue_content':
             self.api.delete_issue(f['project_id'], f['id'])
+        if f['type'] == 'content_block':
+            self.api.delete_contentblock(f['project_id'], f['id'])
         del self.files[path]
         del self.data[path]
 
