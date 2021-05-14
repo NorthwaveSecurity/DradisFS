@@ -11,6 +11,7 @@ from time import time
 from functools import cache
 from templates import default_issue, default_evidence, default_content_block
 import re
+import os
 
 from fuse import FUSE, FuseOSError, Operations, LoggingMixIn
 from dradis import Dradis
@@ -38,17 +39,22 @@ class DradisCached(Dradis):
 class DradisFS(LoggingMixIn, Operations):
     'Interaction with dradis api via filesystem'
 
-    def __init__(self, api_token, url):
+    def __init__(self, api_token, url, project_id=None):
         self.api = DradisCached(api_token, url)
         self.files = {}
-        self.files['/'] = {
-            'stats': self.get_stats(),
-            'type': 'root',
-        }
-        self.projects = {}
         self.data = {}
+        self.projects = {}
         self.fd = 0
-        self.update_projects()
+
+        if project_id:
+            project = self.api.get_project(project_id)
+            self.create_project(project, '/')
+        else:
+            self.files['/'] = {
+                'stats': self.get_stats(),
+                'type': 'root',
+            }
+            self.update_projects()
 
     def get_stats(self, dir=True, mode=0o644):
         now = time()
@@ -126,30 +132,34 @@ class DradisFS(LoggingMixIn, Operations):
             raise FuseOSError(ENOENT)
         return self.files[path]['stats']
 
+    def create_project(self, project, path=None):
+        filename = create_filename('{}_{}'.format(project['id'], project['name']))
+        project['filename'] = filename
+        if not path:
+            path = '/' + filename
+        self.projects[project['id']] = project
+        self.files[path] = {
+            'type': 'project',
+            'stats': self.get_stats(),
+            'id': project['id'],
+        }
+        content_blocks_path = os.path.join(path, 'content_blocks')
+        self.files[content_blocks_path] = {
+            'type': 'content_blocks',
+            'stats': self.get_stats(),
+            'project_id': project['id'],
+        }
+
     def update_projects(self):
         for p in self.api.get_all_projects():
-            filename = create_filename('{}_{}'.format(p['id'], p['name']))
-            p['filename'] = filename
-            path = '/' + filename
-            self.projects[p['id']] = p
-            self.files[path] = {
-                'type': 'project',
-                'stats': self.get_stats(),
-                'id': p['id'],
-            }
-            content_blocks_path = path + '/content_blocks'
-            self.files[content_blocks_path] = {
-                'type': 'content_blocks',
-                'stats': self.get_stats(),
-                'project_id': p['id'],
-            }
+            self.create_project(p)
 
     def get_issues(self, project_path):
         project_id = self.files[project_path]['id']
         result = []
         for i in self.api.get_all_issues(project_id):
             filename = create_filename("{}_{}".format(i['id'], i['title']))
-            path = "{}/{}".format(project_path, filename)
+            path = os.path.join(project_path, filename)
             self.files[path] = {
                 'type': 'issue',
                 'stats': self.get_stats(),
@@ -174,7 +184,7 @@ class DradisFS(LoggingMixIn, Operations):
         result = []
         for node in self.api.get_all_nodes(f['project_id']):
             node_filename = create_filename(node['label'])
-            node_path = "{}/{}".format(issue_path, node_filename)
+            node_path = os.path.join(issue_path, node_filename)
             evidences = list(filter(lambda e: e['issue']['id'] == f['id'], node['evidence']))
             self.files[node_path] = {
                 'type': 'node',
@@ -191,7 +201,7 @@ class DradisFS(LoggingMixIn, Operations):
         result = []
         for block in self.api.get_all_contentblocks(f['project_id']):
             block_filename = create_filename("{}_{}".format(block['id'], block['title']))
-            block_path = "{}/{}".format(path, block_filename)
+            block_path = os.path.join(path, block_filename)
             content = self.encode_contents(block['content'])
             stats = self.get_stats(dir=False)
             stats['st_size'] = len(content)
@@ -220,7 +230,7 @@ class DradisFS(LoggingMixIn, Operations):
                 continue
             filename = str(i)
             i += 1
-            path = "{}/{}".format(node_path, filename)
+            path = os.path.join(node_path, filename)
             stats = self.get_stats(dir=False)
             stats['st_size'] = len(self.encode_contents(e['content']))
             self.files[path] = {
@@ -235,13 +245,13 @@ class DradisFS(LoggingMixIn, Operations):
         return result
 
     def readdir(self, path, fh=None):
-        if path == '/':
-            self.update_projects()
-            return ['.', '..'] + [p['filename'] for p in self.projects.values()]
         if path not in self.files:
             return FuseOSError(ENOENT)
         f = self.files[path]
         type = f['type']
+        if type == 'root':
+            self.update_projects()
+            return ['.', '..'] + [p['filename'] for p in self.projects.values()]
         if type == 'project':
             return ['.', '..', 'content_blocks'] + self.get_issues(path)
         if type == 'issue':
@@ -311,11 +321,16 @@ class DradisFS(LoggingMixIn, Operations):
         pass
 
 
-if __name__ == '__main__':
-    if len(argv) != 2:
-        print('usage: %s <mountpoint>' % argv[0])
-        exit(1)
+def main():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("mountpoint")
+    parser.add_argument("-p", "--project", help="Mount only this dradis project")
+    args = parser.parse_args()
 
     logging.basicConfig(level=logging.DEBUG)
-    fuse = FUSE(DradisFS(api_token, url), argv[1], foreground=True, allow_other=True)
+    dradisfs = DradisFS(api_token, url, project_id=args.project)
+    fuse = FUSE(dradisfs, args.mountpoint, foreground=True, allow_other=True)
 
+if __name__ == '__main__':
+    main()
