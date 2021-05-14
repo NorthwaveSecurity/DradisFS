@@ -9,6 +9,7 @@ from stat import S_IFDIR, S_IFLNK, S_IFREG
 from sys import argv, exit
 from time import time
 from functools import cache
+from templates import default_issue, default_evidence
 import re
 
 from fuse import FUSE, FuseOSError, Operations, LoggingMixIn
@@ -80,24 +81,15 @@ class DradisFS(LoggingMixIn, Operations):
         index = path.rfind("/")
         dir = path[:index]
         f = self.files[dir]
+        stats = self.get_stats(path, mode)
         if f['type'] == 'node':
-            contents = "#[Description]#\n"
+            contents = default_evidence
             evidence = self.api.create_evidence(f['project_id'], f['id'], f['issue_id'], contents)
-            stats = self.get_stats(path, mode)
-            contents = self.encode_contents(contents)
-            stats['st_size'] = len(contents)
-            self.files[path] = {
-                'type': 'evidence',
-                'stats': stats,
-                'node_id': f['id'],
-                'issue_id': f['issue_id'],
-                'project_id': f['project_id'],
-                'id': evidence['id'],
-            }
-            self.data[path] = contents
-            self.utimens(path)
-        self.fd += 1
-        return self.fd 
+            self.get_evidence(dir)
+        if f['type'] == 'project':
+            contents = default_issue
+            issue = self.api.create_issue(f['id'], contents)
+            self.get_issues(dir)
 
     def mkdir(self, path, mode):
         "create new issue"
