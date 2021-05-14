@@ -270,17 +270,25 @@ class DradisFS(LoggingMixIn, Operations):
         pass
         #self.files[new] = self.files.pop(old)
 
-    def rmdir(self, path):
-        "Remove issue or evidences"
-        pass
+    def releasedir(self, path):
+        self.rmdir(path)
 
-    def unlink(self, path):
-        "Remove evidence"
+    def delete(self, path):
         f = self.files[path]
         if f['type'] == 'evidence':
             self.api.delete_evidence(f['project_id'], f['node_id'], f['id'])
+        if f['type'] == 'issue' or f['type'] == 'issue_content':
+            self.api.delete_issue(f['project_id'], f['id'])
         del self.files[path]
         del self.data[path]
+
+    def rmdir(self, path):
+        "Remove issue"
+        self.delete(path)
+
+    def unlink(self, path):
+        "Remove evidence"
+        self.delete(path)
 
     def truncate(self, path, length, fh):
         self.data[path] = self.data[path][:length]
