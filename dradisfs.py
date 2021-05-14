@@ -4,7 +4,7 @@ from __future__ import print_function, absolute_import, division
 import logging
 
 from collections import defaultdict
-from errno import ENOENT
+from errno import ENOENT, ENOSYS
 from stat import S_IFDIR, S_IFLNK, S_IFREG
 from sys import argv, exit
 from time import time
@@ -33,17 +33,21 @@ class DradisCached(Dradis):
     def get_all_projects(self):
         return super().get_all_projects()
 
-    @cache
-    def get_all_issues(self, project_id):
-        return super().get_all_issues(project_id)
+    # @cache
+    # def get_all_issues(self, project_id):
+    #     return super().get_all_issues(project_id)
 
-    @cache
-    def get_all_evidence(self, project_id, node_id):
-        return super().get_all_evidence(project_id, node_id)
+    # @cache
+    # def get_all_evidence(self, project_id, node_id):
+    #     return super().get_all_evidence(project_id, node_id)
 
-    @cache
-    def get_all_nodes(self, project_id):
-        return super().get_all_nodes(project_id)
+    # @cache
+    # def get_all_nodes(self, project_id):
+    #     return super().get_all_nodes(project_id)
+
+    # @cache
+    # def get_evidence(self, project_id, node_id, evidence_id):
+    #     return super().get_evidence(project_id, node_id, evidence_id)
 
 
 class DradisFS(LoggingMixIn, Operations):
@@ -88,9 +92,15 @@ class DradisFS(LoggingMixIn, Operations):
             contents = self.encode_contents(evidence['content'])
             self.data[path] = contents
             self.files[path]['stats']['st_size'] = len(contents)
+            self.utimens(path)
             self.fd += 1
             return self.fd
         elif f['type'] == 'issue_content':
+            issue = self.api.get_issue(f['project_id'], f['id'])
+            text = self.encode_contents(issue['text'])
+            self.data[path] = text
+            self.files[path]['stats']['st_size'] = len(text)
+            self.utimens(path)
             self.fd += 1
             return self.fd
         else:
@@ -105,7 +115,7 @@ class DradisFS(LoggingMixIn, Operations):
         try:
             return attrs[name]
         except KeyError:
-            return ''       # Should return ENOATTR
+            return FuseOSError(ENOATTR)
 
     def getattr(self, path, fh=None):
         if path not in self.files:
@@ -175,6 +185,9 @@ class DradisFS(LoggingMixIn, Operations):
     def encode_contents(self, contents):
         return contents.encode('utf-8')
 
+    def decode_contents(self, contents):
+        return contents.decode('utf-8')
+
     def get_evidence(self, node_path):
         f = self.files[node_path]
         result = []
@@ -220,19 +233,30 @@ class DradisFS(LoggingMixIn, Operations):
         #self.files[new] = self.files.pop(old)
 
     def rmdir(self, path):
-        "Remove issue and evidences"
+        "Remove issue or evidences"
         pass
 
     def unlink(self, path):
-        "Remote evidence"
+        "Remove evidence"
         pass
+
+    def truncate(self, path, length, fh):
+        self.data[path] = self.data[path][:length]
+        self.files[path]['stats']['st_size'] = length
+        self.utimens(path)
 
     def write(self, path, data, offset, fh):
         "Update issue"
-        pass
-        # self.data[path] = self.data[path][:offset] + data
-        # self.files[path]['st_size'] = len(self.data[path])
-        # return len(data)
+        self.data[path] = self.data[path][:offset] + data
+        self.files[path]['stats']['st_size'] = len(self.data[path])
+        contents = self.decode_contents(self.data[path])
+        f = self.files[path]
+        if f['type'] == 'evidence':
+            self.api.update_evidence(f['project_id'], f['node_id'], f['issue_id'], f['id'], contents)
+        if f['type'] == 'issue_content':
+            self.api.update_issue(f['project_id'], f['id'], contents)
+        self.utimens(path)
+        return len(data)
 
     def utimens(self, path, times=None):
         now = time()
@@ -247,5 +271,5 @@ if __name__ == '__main__':
         exit(1)
 
     logging.basicConfig(level=logging.DEBUG)
-    fuse = FUSE(DradisFS(api_token, url), argv[1], foreground=True)
+    fuse = FUSE(DradisFS(api_token, url), argv[1], foreground=True, allow_other=True)
 
