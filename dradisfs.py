@@ -183,6 +183,8 @@ class DradisFS(LoggingMixIn, Operations):
         f = self.files[issue_path]
         result = []
         for node in self.api.get_all_nodes(f['project_id']):
+            if not (node['parent_id'] is None and node['type_id'] == 1):
+                continue
             node_filename = create_filename(node['label'])
             node_path = os.path.join(issue_path, node_filename)
             evidences = list(filter(lambda e: e['issue']['id'] == f['id'], node['evidence']))
