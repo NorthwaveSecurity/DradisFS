@@ -24,6 +24,8 @@ config.read('config.ini')
 api_token = config['DEFAULT']['api_token']
 url = config['DEFAULT']['url']
 
+DEFAULT_MODE = 0o644
+
 
 def create_filename(label):
     return re.sub(r'[^\w\-_\. ]', '_', label)
@@ -56,7 +58,7 @@ class DradisFS(LoggingMixIn, Operations):
             }
             self.update_projects()
 
-    def get_stats(self, dir=True, mode=0o644):
+    def get_stats(self, dir=True, mode=DEFAULT_MODE):
         now = time()
         if dir:
             return dict(st_mode=(S_IFDIR | mode), st_ctime=now,
@@ -72,7 +74,7 @@ class DradisFS(LoggingMixIn, Operations):
         dir = path[:index]
         filename = path[index+1:]
         f = self.files[dir]
-        stats = self.get_stats(path, mode)
+        stats = self.get_stats(path, mode=mode)
         if f['type'] == 'node':
             contents = default_evidence
             evidence = self.api.create_evidence(f['project_id'], f['id'], f['issue_id'], contents)
@@ -96,6 +98,11 @@ class DradisFS(LoggingMixIn, Operations):
 
     def open(self, path, flags):
         "open fd"
+        self.get_content(path)
+        self.fd += 1
+        return self.fd
+
+    def get_content(self, path):
         f = self.files[path]
         if f['type'] == 'evidence':
             evidence = self.api.get_evidence(f['project_id'], f['node_id'], f['id'])
@@ -108,13 +115,10 @@ class DradisFS(LoggingMixIn, Operations):
             contents = content_block['content']
         else:
             return FuseOSError("Failed to open file")
-
         contents = self.encode_contents(contents)
         self.data[path] = contents
         self.files[path]['stats']['st_size'] = len(contents)
         self.utimens(path)
-        self.fd += 1
-        return self.fd
 
     def read(self, path, size, offset, fh):
         return self.data[path][offset:offset + size]
@@ -169,7 +173,7 @@ class DradisFS(LoggingMixIn, Operations):
             issue_content_path = path + "/issue"
             self.files[issue_content_path] = {
                 'type': 'issue_content',
-                'stats': self.get_stats(False),
+                'stats': self.get_stats(dir=False),
                 'id': i['id'],
                 'project_id': project_id,
             }
@@ -223,26 +227,31 @@ class DradisFS(LoggingMixIn, Operations):
     def decode_contents(self, contents):
         return contents.decode('utf-8')
 
+    def add_evidence_to_files(self, path, evidence, node_file):
+        stats = self.get_stats(dir=False)
+        contents = self.encode_contents(evidence['content'])
+        stats['st_size'] = len(contents)
+        self.files[path] = {
+            'type': 'evidence',
+            'stats': stats,
+            'node_id': node_file['id'],
+            'issue_id': node_file['issue_id'],
+            'project_id': node_file['project_id'],
+            'id': evidence['id'],
+        }
+        self.data[path] = contents
+
     def get_evidence(self, node_path):
         f = self.files[node_path]
         result = []
         i = 0
-        for e in sorted(self.api.get_all_evidence(f['project_id'], f['id']), key=lambda x:x['id']):
+        for e in sorted(self.api.get_all_evidence(f['project_id'], f['id']), key=lambda x: x['id']):
             if e['issue']['id'] != f['issue_id']:
                 continue
             filename = str(i)
             i += 1
             path = os.path.join(node_path, filename)
-            stats = self.get_stats(dir=False)
-            stats['st_size'] = len(self.encode_contents(e['content']))
-            self.files[path] = {
-                'type': 'evidence',
-                'stats': stats,
-                'node_id': f['id'],
-                'issue_id': f['issue_id'],
-                'project_id': f['project_id'],
-                'id': e['id'],
-            }
+            self.add_evidence_to_files(path, e, f)
             result.append(filename)
         return result
 
@@ -266,8 +275,13 @@ class DradisFS(LoggingMixIn, Operations):
 
     def rename(self, old, new):
         "Rename issue or evidence"
-        pass
-        #self.files[new] = self.files.pop(old)
+        if new not in self.files:
+            # File should be created
+            self.create(new, DEFAULT_MODE)
+        self.get_content(old)
+        self.data[new] = self.data[old]
+        self.update(new)
+        self.delete(old)
 
     def releasedir(self, path):
         self.rmdir(path)
@@ -298,10 +312,7 @@ class DradisFS(LoggingMixIn, Operations):
         self.files[path]['stats']['st_size'] = length
         self.utimens(path)
 
-    def write(self, path, data, offset, fh):
-        "Update issue"
-        self.data[path] = self.data[path][:offset] + data
-        self.files[path]['stats']['st_size'] = len(self.data[path])
+    def update(self, path):
         contents = self.decode_contents(self.data[path])
         f = self.files[path]
         if f['type'] == 'evidence':
@@ -311,6 +322,12 @@ class DradisFS(LoggingMixIn, Operations):
         if f['type'] == 'content_block':
             self.api.update_contentblock(f['project_id'], f['id'], contents)
         self.utimens(path)
+
+    def write(self, path, data, offset, fh):
+        "Update issue"
+        self.data[path] = self.data[path][:offset] + data
+        self.files[path]['stats']['st_size'] = len(self.data[path])
+        self.update(path)
         return len(data)
 
     def utimens(self, path, times=None):
