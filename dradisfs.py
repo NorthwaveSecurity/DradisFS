@@ -244,7 +244,7 @@ class DradisFS(LoggingMixIn, Operations):
     def get_evidence(self, node_path):
         f = self.files[node_path]
         result = []
-        i = 0
+        i = 1
         for e in sorted(self.api.get_all_evidence(f['project_id'], f['id']), key=lambda x: x['id']):
             if e['issue']['id'] != f['issue_id']:
                 continue
