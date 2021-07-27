@@ -4,7 +4,7 @@ from __future__ import print_function, absolute_import, division
 import logging
 
 from collections import defaultdict
-from errno import ENOENT, ENOSYS, ENOATTR
+from errno import ENOENT, ENOSYS, ENOATTR, EPERM
 from stat import S_IFDIR, S_IFLNK, S_IFREG
 from sys import argv, exit
 from time import time
@@ -72,6 +72,8 @@ class DradisFS(LoggingMixIn, Operations):
         "create new evidence or issue"
         index = path.rfind("/")
         dir = path[:index]
+        if dir == '':
+            dir = '/'
         filename = path[index+1:]
         f = self.files[dir]
         stats = self.get_stats(path, mode=mode)
@@ -290,12 +292,14 @@ class DradisFS(LoggingMixIn, Operations):
         f = self.files[path]
         if f['type'] == 'evidence':
             self.api.delete_evidence(f['project_id'], f['node_id'], f['id'])
-        if f['type'] == 'issue' or f['type'] == 'issue_content':
+        elif f['type'] == 'issue' or f['type'] == 'issue_content':
             self.api.delete_issue(f['project_id'], f['id'])
-        if f['type'] == 'content_block':
+        elif f['type'] == 'content_block':
             self.api.delete_contentblock(f['project_id'], f['id'])
-        if f['type'] == 'node':
+        elif f['type'] == 'node':
             self.api.delete_node(f['project_id'], f['id'])
+        else:
+            raise FuseOSError(EPERM)
         del self.files[path]
         del self.data[path]
 
