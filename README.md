@@ -1,6 +1,6 @@
 <p align="center">
     <br/>
-    <b>DradisFS is a fuse filesystem for using the <a href="https://dradisframework.com/support/guides/rest_api/">API of Dradis</a>.</b>
+    <b>DradisFS is a <a href="https://www.kernel.org/doc/html/v5.8/filesystems/fuse.html">FUSE filesystem</a> for using the <a href="https://dradisframework.com/support/guides/rest_api/">API of Dradis</a>.</b>
     <br/>
     <a href="#goal">Goal</a>
     •
