@@ -3,10 +3,8 @@ from __future__ import print_function, absolute_import, division
 
 import logging
 
-from collections import defaultdict
-from errno import ENOENT, ENOSYS, ENOATTR, EPERM
-from stat import S_IFDIR, S_IFLNK, S_IFREG
-from sys import argv, exit
+from errno import ENOENT, EPERM
+from stat import S_IFDIR, S_IFREG
 from time import time
 from functools import cache
 from templates import default_issue, default_evidence, default_content_block
@@ -28,10 +26,16 @@ DEFAULT_MODE = 0o644
 
 
 def create_filename(label):
+    """Replace invalid characters in a filename
+
+    :returns: A valid filename
+    """
+
     return re.sub(r'[^\w\-_\. ]', '_', label)
 
 
 class DradisCached(Dradis):
+    '''A cache around the Dradis API to prevent having to query all documents every time'''
 
     @cache
     def get_all_projects(self):
@@ -39,7 +43,7 @@ class DradisCached(Dradis):
 
 
 class DradisFS(LoggingMixIn, Operations):
-    'Interaction with dradis api via filesystem'
+    '''Interaction with dradis api via filesystem'''
 
     def __init__(self, api_token, url, project_id=None):
         self.api = DradisCached(api_token, url)
@@ -49,9 +53,11 @@ class DradisFS(LoggingMixIn, Operations):
         self.fd = 0
 
         if project_id:
+            # If a project id is provided, mount that project as the root
             project = self.api.get_project(project_id)
             self.create_project(project, '/')
         else:
+            # Otherwise, mount the directory containing all projects
             self.files['/'] = {
                 'stats': self.get_stats(),
                 'type': 'root',
@@ -59,23 +65,46 @@ class DradisFS(LoggingMixIn, Operations):
             self.update_projects()
 
     def get_stats(self, dir=True, mode=DEFAULT_MODE):
+        """Wrapper to assign base properties to a new file or directory
+
+        :param dir: If True return stats for directory instead of file
+        :param mode: Unix permissions to assign
+        """
+
         now = time()
         if dir:
             return dict(st_mode=(S_IFDIR | mode), st_ctime=now,
                         st_mtime=now, st_atime=now, st_nlink=2)
         else:
             return dict(st_mode=(S_IFREG | mode), st_nlink=1,
-                                 st_size=0, st_ctime=time(), st_mtime=time(),
-                                 st_atime=time())
+                        st_size=0, st_ctime=time(), st_mtime=time(),
+                        st_atime=time())
+
+    def update_contents(self, path, contents):
+        """Update the contents of a file while keeping all statistics in sync"""
+
+        # Update contents
+        self.data[path] = contents
+        # Update file size
+        self.files[path]['stats']['st_size'] = len(contents)
+        # Update times
+        self.utimens(path)
 
     def create(self, path, mode):
-        "create new evidence or issue"
+        """create new evidence, issue, content block or node
+
+        :param path: Path to the issue
+        :param mode: Unix permissions to assign
+        """
+
+        # Split path into directory and filename
         index = path.rfind("/")
         dir = path[:index]
         if dir == '':
             dir = '/'
         filename = path[index+1:]
         f = self.files[dir]
+
         stats = self.get_stats(path, mode=mode)
         if f['type'] == 'node':
             contents = default_evidence
@@ -95,16 +124,18 @@ class DradisFS(LoggingMixIn, Operations):
             self.get_nodes(dir)
 
     def mkdir(self, path, mode):
-        "create new issue"
+        """Currently not used, create a file instead"""
         pass
 
     def open(self, path, flags):
-        "open fd"
+        """open fd"""
         self.get_content(path)
         self.fd += 1
         return self.fd
 
     def get_content(self, path):
+        """Get contents of evidence, issue or content block from Dradis and store it locally"""
+
         f = self.files[path]
         if f['type'] == 'evidence':
             evidence = self.api.get_evidence(f['project_id'], f['node_id'], f['id'])
@@ -118,9 +149,7 @@ class DradisFS(LoggingMixIn, Operations):
         else:
             return FuseOSError("Failed to open file")
         contents = self.encode_contents(contents)
-        self.data[path] = contents
-        self.files[path]['stats']['st_size'] = len(contents)
-        self.utimens(path)
+        self.update_contents(path, contents)
 
     def read(self, path, size, offset, fh):
         return self.data[path][offset:offset + size]
@@ -139,16 +168,20 @@ class DradisFS(LoggingMixIn, Operations):
         return self.files[path]['stats']
 
     def create_project(self, project, path=None):
+        """Create a new project"""
+
         filename = create_filename('{}_{}'.format(project['id'], project['name']))
         project['filename'] = filename
         if not path:
             path = '/' + filename
+        # Create project
         self.projects[project['id']] = project
         self.files[path] = {
             'type': 'project',
             'stats': self.get_stats(),
             'id': project['id'],
         }
+        # Add path for content blocks of the project
         content_blocks_path = os.path.join(path, 'content_blocks')
         self.files[content_blocks_path] = {
             'type': 'content_blocks',
@@ -157,13 +190,20 @@ class DradisFS(LoggingMixIn, Operations):
         }
 
     def update_projects(self):
+        """Get the latest version of all projects"""
         for p in self.api.get_all_projects():
             self.create_project(p)
 
     def get_issues(self, project_path):
+        """Get all issues for a project
+
+        :returns: List of issue filenames
+        """
+
         project_id = self.files[project_path]['id']
         result = []
         for i in self.api.get_all_issues(project_id):
+            # Create the issues
             filename = create_filename("{}_{}".format(i['id'], i['title']))
             path = os.path.join(project_path, filename)
             self.files[path] = {
@@ -172,6 +212,7 @@ class DradisFS(LoggingMixIn, Operations):
                 'id': i['id'],
                 'project_id': project_id,
             }
+            # Add the /issue file containing the contents
             issue_content_path = path + "/issue"
             self.files[issue_content_path] = {
                 'type': 'issue_content',
@@ -180,20 +221,24 @@ class DradisFS(LoggingMixIn, Operations):
                 'project_id': project_id,
             }
             contents = self.encode_contents(i['text'])
-            self.files[issue_content_path]['stats']['st_size'] = len(contents)
-            self.data[issue_content_path] = contents
+            self.update_contents(issue_content_path, contents)
             result.append(filename)
         return result
 
     def get_nodes(self, issue_path):
+        """Get all nodes for an issue
+
+        :returns: List of node filenames
+        """
+
         f = self.files[issue_path]
         result = []
         for node in self.api.get_all_nodes(f['project_id']):
             if not (node['parent_id'] is None and node['type_id'] == 1):
+                # Filter nodes that are not usually used
                 continue
             node_filename = create_filename(node['label'])
             node_path = os.path.join(issue_path, node_filename)
-            evidences = list(filter(lambda e: e['issue']['id'] == f['id'], node['evidence']))
             self.files[node_path] = {
                 'type': 'node',
                 'stats': self.get_stats(),
@@ -205,6 +250,11 @@ class DradisFS(LoggingMixIn, Operations):
         return result
 
     def get_content_blocks(self, path):
+        """Get all content blocks
+
+        :returns: List of content block filenames
+        """
+
         f = self.files[path]
         result = []
         for block in self.api.get_all_contentblocks(f['project_id']):
@@ -230,6 +280,13 @@ class DradisFS(LoggingMixIn, Operations):
         return contents.decode('utf-8')
 
     def add_evidence_to_files(self, path, evidence, node_file):
+        """Add the given evidence object to the files dictionary
+
+        :param path: Path of the evidence
+        :param evidence: The evidence object from Dradis
+        :param node_file: The file dictionary containing the node information
+        """
+
         stats = self.get_stats(dir=False)
         contents = self.encode_contents(evidence['content'])
         stats['st_size'] = len(contents)
@@ -244,11 +301,19 @@ class DradisFS(LoggingMixIn, Operations):
         self.data[path] = contents
 
     def get_evidence(self, node_path):
+        """Get all evidence for a given node
+
+        :returns: List of evidence filenames
+        """
+
         f = self.files[node_path]
         result = []
+        # Start indexing the evidences
         i = 1
+        # Sort the evidences by id to keep a fixed order
         for e in sorted(self.api.get_all_evidence(f['project_id'], f['id']), key=lambda x: x['id']):
             if e['issue']['id'] != f['issue_id']:
+                # Skip evidences that do not belong to the issue of the given node_path
                 continue
             filename = str(i)
             i += 1
@@ -258,6 +323,11 @@ class DradisFS(LoggingMixIn, Operations):
         return result
 
     def readdir(self, path, fh=None):
+        """Read contents of a directory
+
+        :returns: List of filenames
+        """
+
         if path not in self.files:
             return FuseOSError(ENOENT)
         f = self.files[path]
@@ -276,19 +346,23 @@ class DradisFS(LoggingMixIn, Operations):
         return ['.', '..']
 
     def rename(self, old, new):
-        "Rename issue or evidence"
+        """Rename issue or evidence, this is executed when the unix `mv` command is executed"""
+
         if new not in self.files:
             # File should be created
             self.create(new, DEFAULT_MODE)
+        # Refresh the content of the source
         self.get_content(old)
+        # Copy the contents to the destination
         self.data[new] = self.data[old]
+        # Sync to Dradis
         self.update(new)
+        # Delete the source
         self.delete(old)
 
-    def releasedir(self, path):
-        self.rmdir(path)
-
     def delete(self, path):
+        """Delete a file or directory"""
+
         f = self.files[path]
         if f['type'] == 'evidence':
             self.api.delete_evidence(f['project_id'], f['node_id'], f['id'])
@@ -300,23 +374,32 @@ class DradisFS(LoggingMixIn, Operations):
             self.api.delete_node(f['project_id'], f['id'])
         else:
             raise FuseOSError(EPERM)
+
+        # Remove from local filesystem
         del self.files[path]
         del self.data[path]
 
     def rmdir(self, path):
-        "Remove issue"
+        """Remove issue or node"""
         self.delete(path)
 
     def unlink(self, path):
-        "Remove evidence"
+        """Remove evidence"""
         self.delete(path)
 
+    def releasedir(self, path):
+        self.rmdir(path)
+
     def truncate(self, path, length, fh):
+        """Truncate a file"""
+
         self.data[path] = self.data[path][:length]
         self.files[path]['stats']['st_size'] = length
         self.utimens(path)
 
     def update(self, path):
+        """Sync contents of the given path to Dradis"""
+
         contents = self.decode_contents(self.data[path])
         f = self.files[path]
         if f['type'] == 'evidence':
@@ -328,13 +411,20 @@ class DradisFS(LoggingMixIn, Operations):
         self.utimens(path)
 
     def write(self, path, data, offset, fh):
-        "Update issue"
+        """Update contents of file"""
+
         self.data[path] = self.data[path][:offset] + data
         self.files[path]['stats']['st_size'] = len(self.data[path])
         self.update(path)
         return len(data)
 
     def utimens(self, path, times=None):
+        """Update access and modification times
+
+        :param path: Path to update
+        :param times: A tuple of the access time and modification time (atime, mtime)
+        """
+
         now = time()
         atime, mtime = times if times else (now, now)
         self.files[path]['stats']['st_atime'] = atime
