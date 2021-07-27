@@ -72,17 +72,17 @@ $  cat 113563_/issue
 #[Title]#
 
 #[CVSSv3.BaseScore]#
-#
-##[CVSSv3Vector]#
-#
-##[Type]#
-#Internal | External
-#
-##[Description]#
-#
-##[Solution]#
-#
-##[References]#
+
+#[CVSSv3Vector]#
+
+#[Type]#
+Internal | External
+
+#[Description]#
+
+#[Solution]#
+
+#[References]#
 ```
 
 The error message can be ignored since the issue has successfully been created. Now a new directory is created with as the name the issue id and then the issue title (which is still empty). The issue directory contains the file "issue", which is the issue text. Let's give the issue a title:
@@ -93,17 +93,17 @@ $ cat << EOF > 113563_/issue
 First issue
 
 #[CVSSv3.BaseScore]#
-#
-##[CVSSv3Vector]#
-#
-##[Type]#
-#Internal | External
-#
-##[Description]#
-#
-##[Solution]#
-#
-##[References]#
+
+#[CVSSv3Vector]#
+
+#[Type]#
+Internal | External
+
+#[Description]#
+
+#[Solution]#
+
+#[References]#
 EOF
 $ find .
 .
