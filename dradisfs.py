@@ -16,8 +16,9 @@ from dradis import Dradis
 
 import configparser
 
+dir = os.path.dirname(os.path.realpath(__file__))
 config = configparser.ConfigParser()
-config.read('config.ini')
+config.read(os.path.join(dir, 'config.ini'))
 
 api_token = config['DEFAULT']['api_token']
 url = config['DEFAULT']['url']
