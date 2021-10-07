@@ -1,2 +1,2 @@
-git+ssh://git@gitlab.local.northwave.nl/redteam/dradis-api.git@v1.0
+git+ssh://git@github.com:NorthwaveSecurity/dradis-api.git@v1.1
 fusepy
