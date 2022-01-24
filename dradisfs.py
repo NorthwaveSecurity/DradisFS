@@ -7,6 +7,7 @@ from errno import ENOENT, EPERM
 from stat import S_IFDIR, S_IFREG
 from time import time
 from functools import cache
+from cachetools import cached, TTLCache
 from templates import default_issue, default_evidence, default_content_block
 import re
 import os
@@ -226,6 +227,7 @@ class DradisFS(LoggingMixIn, Operations):
             result.append(filename)
         return result
 
+    @cached(TTLCache(maxsize=1024, ttl=10))
     def get_nodes(self, issue_path):
         """Get all nodes for an issue
 
@@ -238,7 +240,10 @@ class DradisFS(LoggingMixIn, Operations):
             if not (node['parent_id'] is None and node['type_id'] == 1):
                 # Filter nodes that are not usually used
                 continue
+            evidence = list(self.get_evidence_for_issue(f['project_id'], node['id'], f['id']))
             node_filename = create_filename(node['label'])
+            if evidence:
+                node_filename += " *"
             node_path = os.path.join(issue_path, node_filename)
             self.files[node_path] = {
                 'type': 'node',
@@ -301,6 +306,13 @@ class DradisFS(LoggingMixIn, Operations):
         }
         self.data[path] = contents
 
+    def get_evidence_for_issue(self, project_id, node_id, issue_id):
+        for e in sorted(self.api.get_all_evidence(project_id, node_id), key=lambda x: x['id']):
+            if e['issue']['id'] != issue_id:
+                # Skip evidences that do not belong to the issue of the given node_path
+                continue
+            yield e
+
     def get_evidence(self, node_path):
         """Get all evidence for a given node
 
@@ -311,11 +323,7 @@ class DradisFS(LoggingMixIn, Operations):
         result = []
         # Start indexing the evidences
         i = 1
-        # Sort the evidences by id to keep a fixed order
-        for e in sorted(self.api.get_all_evidence(f['project_id'], f['id']), key=lambda x: x['id']):
-            if e['issue']['id'] != f['issue_id']:
-                # Skip evidences that do not belong to the issue of the given node_path
-                continue
+        for e in self.get_evidence_for_issue(f['project_id'], f['id'], f['issue_id']):
             filename = str(i)
             i += 1
             path = os.path.join(node_path, filename)
