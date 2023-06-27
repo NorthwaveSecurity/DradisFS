@@ -396,8 +396,8 @@ class DradisFS(LoggingMixIn, Operations):
         """Remove evidence"""
         self.delete(path)
 
-    def releasedir(self, path):
-        self.rmdir(path)
+    def releasedir(self, path, *args):
+        pass
 
     def truncate(self, path, length, fh):
         """Truncate a file"""
