@@ -26,6 +26,9 @@ url = config['DEFAULT']['url']
 
 DEFAULT_MODE = 0o644
 
+ISSUES_DIRNAME = 'issues'
+CONTENT_BLOCKS_DIRNAME = 'content_blocks'
+
 
 def create_filename(label):
     """Replace invalid characters in a filename
@@ -184,9 +187,15 @@ class DradisFS(LoggingMixIn, Operations):
             'id': project['id'],
         }
         # Add path for content blocks of the project
-        content_blocks_path = os.path.join(path, 'content_blocks')
+        content_blocks_path = os.path.join(path, CONTENT_BLOCKS_DIRNAME)
         self.files[content_blocks_path] = {
             'type': 'content_blocks',
+            'stats': self.get_stats(),
+            'project_id': project['id'],
+        }
+        issues_path = os.path.join(path, ISSUES_DIRNAME)
+        self.files[issues_path] = {
+            'type': 'issues',
             'stats': self.get_stats(),
             'project_id': project['id'],
         }
@@ -196,26 +205,26 @@ class DradisFS(LoggingMixIn, Operations):
         for p in self.api.get_all_projects():
             self.create_project(p)
 
-    def get_issues(self, project_path):
+    def get_issues(self, path):
         """Get all issues for a project
 
         :returns: List of issue filenames
         """
 
-        project_id = self.files[project_path]['id']
+        project_id = self.files[path]['project_id']
         result = []
         for i in self.api.get_all_issues(project_id):
             # Create the issues
-            filename = create_filename("{}_{}".format(i['id'], i['title']))
-            path = os.path.join(project_path, filename)
-            self.files[path] = {
+            filename = create_filename("{}_{}".format(i['title'], i['id']))
+            issue_path = os.path.join(path, filename)
+            self.files[issue_path] = {
                 'type': 'issue',
                 'stats': self.get_stats(),
                 'id': i['id'],
                 'project_id': project_id,
             }
             # Add the /issue file containing the contents
-            issue_content_path = path + "/issue"
+            issue_content_path = issue_path + "/issue"
             self.files[issue_content_path] = {
                 'type': 'issue_content',
                 'stats': self.get_stats(dir=False),
@@ -237,7 +246,7 @@ class DradisFS(LoggingMixIn, Operations):
         f = self.files[issue_path]
         result = []
         for node in self.api.get_all_nodes(f['project_id']):
-            if not (node['parent_id'] is None and node['type_id'] == 1):
+            if not node['type_id'] == 1:
                 # Filter nodes that are not usually used
                 continue
             evidence = list(self.get_evidence_for_issue(f['project_id'], node['id'], f['id']))
@@ -345,13 +354,15 @@ class DradisFS(LoggingMixIn, Operations):
             self.update_projects()
             return ['.', '..'] + [p['filename'] for p in self.projects.values()]
         if type == 'project':
-            return ['.', '..', 'content_blocks'] + self.get_issues(path)
+            return ['.', '..', CONTENT_BLOCKS_DIRNAME, ISSUES_DIRNAME]
         if type == 'issue':
             return ['.', '..', 'issue'] + self.get_nodes(path)
         if type == 'node':
             return ['.', '..'] + self.get_evidence(path)
         if type == 'content_blocks':
             return ['.', '..'] + self.get_content_blocks(path)
+        if type == 'issues':
+            return ['.', '..'] + self.get_issues(path)
         return ['.', '..']
 
     def rename(self, old, new):
