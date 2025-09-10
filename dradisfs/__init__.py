@@ -868,12 +868,14 @@ def main():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("mountpoint")
-    parser.add_argument("-p", "--project", help="Mount only this dradis project")
+    parser.add_argument("-p", "--project", help="Mount only this dradis project", default=os.environ.get('DRADIS_PROJECT'))
     parser.add_argument("--only-nodes-with-evidence", action='store_true', help="Show only nodes with evidence, hiding nodes without evidence for issues. This can be useful if you have a lot of nodes in a project, which can clutter the view.")
     parser.add_argument("--allow-delete", action='store_true', help="Allow performing delete actions, this is disabled by default for safety reasons.")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
+    if not args.project:
+        raise argparse.ArgumentError("You must provide a project id via -p/--project or the DRADIS_PROJECT environment variable")
     dradisfs = DradisFS(api_token, url, project_id=args.project, only_nodes_with_evidence=args.only_nodes_with_evidence, allow_delete=args.allow_delete)
     sync_thread = threading.Thread(target=sync, args=(dradisfs, ))
     sync_thread.start()
